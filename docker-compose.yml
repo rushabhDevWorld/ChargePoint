@@ -1,0 +1,23 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: hygiene
+      POSTGRES_PASSWORD: hygiene
+      POSTGRES_DB: hygiene
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hygiene"]
+      interval: 3s
+      retries: 10
+
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg2://hygiene:hygiene@db:5432/hygiene
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
