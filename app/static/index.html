@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Network Hygiene Dashboard</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: #f4f6f8; color: #1f2933; }
+    header { background: #1f2933; color: #fff; padding: 14px 24px; display: flex; justify-content: space-between; align-items: center; }
+    header h1 { font-size: 18px; margin: 0; }
+    header small { color: #9aa5b1; }
+    main { max-width: 1100px; margin: 20px auto; padding: 0 16px; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+    .card, section { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    .card .label { font-size: 12px; color: #616e7c; text-transform: uppercase; }
+    .card .value { font-size: 28px; font-weight: 600; margin-top: 4px; }
+    .card.bad .value { color: #c62828; }
+    .grid { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; margin-top: 12px; }
+    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+    h2 { font-size: 15px; margin: 0 0 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid #e4e7eb; }
+    th { color: #616e7c; font-weight: 500; font-size: 12px; }
+    tbody tr { cursor: pointer; }
+    tbody tr:hover { background: #f0f4f8; }
+    .pill { padding: 2px 8px; border-radius: 10px; font-size: 12px; }
+    .pill.online { background: #e0f4e5; color: #1b6b32; }
+    .pill.offline { background: #fde4e4; color: #a12020; }
+    .region-row { margin-bottom: 10px; font-size: 13px; }
+    .bar { height: 8px; background: #3b82f6; border-radius: 4px; margin-top: 3px; }
+    .muted { color: #7b8794; font-size: 13px; }
+    form { display: flex; gap: 8px; margin-bottom: 12px; }
+    input { flex: 1; padding: 7px 10px; border: 1px solid #cbd2d9; border-radius: 6px; }
+    button { padding: 7px 14px; border: 0; border-radius: 6px; background: #1f2933; color: #fff; cursor: pointer; }
+    #detail dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 14px; margin: 0 0 12px; }
+    #detail dt { color: #616e7c; }
+    #detail dd { margin: 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Network Hygiene Dashboard</h1>
+    <small id="updated">loading...</small>
+  </header>
+
+  <main>
+    <div class="cards">
+      <div class="card"><div class="label">Stations</div><div class="value" id="total">-</div></div>
+      <div class="card bad"><div class="label">Poor hygiene</div><div class="value" id="poor">-</div></div>
+      <div class="card"><div class="label">Avg latency</div><div class="value" id="latency">-</div></div>
+      <div class="card"><div class="label">Avg score</div><div class="value" id="score">-</div></div>
+    </div>
+
+    <div class="grid">
+      <section>
+        <h2>Stations with poor hygiene <span class="muted">(click a row for details)</span></h2>
+        <table>
+          <thead><tr><th>Station</th><th>Region</th><th>Status</th><th>Latency</th><th>Errors</th><th>Score</th></tr></thead>
+          <tbody id="poor-rows"></tbody>
+        </table>
+        <p class="muted" id="poor-empty" hidden>No stations below the threshold.</p>
+      </section>
+
+      <section>
+        <h2>Average latency by region</h2>
+        <div id="regions"></div>
+      </section>
+    </div>
+
+    <section style="margin-top:12px">
+      <h2>Station details</h2>
+      <form id="lookup">
+        <input id="station-input" placeholder="Station ID, e.g. st-001">
+        <button>Look up</button>
+      </form>
+      <div id="detail" class="muted">Pick a station above or search for one.</div>
+    </section>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    // station ids and regions come from devices, so never put them in innerHTML raw
+    function el(tag, text, className) {
+      const e = document.createElement(tag);
+      if (text !== undefined) e.textContent = text;
+      if (className) e.className = className;
+      return e;
+    }
+
+    async function getJson(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(res.status);
+      return res.json();
+    }
+
+    async function loadOverview() {
+      const [metrics, poor] = await Promise.all([getJson("/metrics"), getJson("/stations/poor")]);
+
+      $("total").textContent = metrics.total_stations;
+      $("poor").textContent = metrics.poor_stations;
+      $("latency").textContent = Math.round(metrics.avg_latency_ms) + " ms";
+      $("score").textContent = metrics.avg_score.toFixed(1);
+
+      const rows = $("poor-rows");
+      rows.replaceChildren();
+      poor.slice(0, 50).forEach((s) => {
+        const tr = el("tr");
+        tr.append(el("td", s.station_id), el("td", s.region || "-"));
+        const status = el("td");
+        status.append(el("span", s.connectivity_status, "pill " + s.connectivity_status));
+        tr.append(status, el("td", s.latency_ms + " ms"), el("td", s.error_count), el("td", s.score));
+        tr.onclick = () => showStation(s.station_id);
+        rows.append(tr);
+      });
+      $("poor-empty").hidden = poor.length > 0;
+
+      const regions = $("regions");
+      regions.replaceChildren();
+      const max = Math.max(1, ...metrics.regions.map((r) => r.avg_latency_ms));
+      metrics.regions.forEach((r) => {
+        const row = el("div", undefined, "region-row");
+        row.append(el("div", r.region + " - " + Math.round(r.avg_latency_ms) + " ms (" + r.stations + " stations)"));
+        const bar = el("div", undefined, "bar");
+        bar.style.width = (r.avg_latency_ms / max) * 100 + "%";
+        row.append(bar);
+        regions.append(row);
+      });
+
+      $("updated").textContent = "updated " + new Date().toLocaleTimeString();
+    }
+
+    function sparkline(scores) {
+      const w = 400, h = 70;
+      const step = scores.length > 1 ? w / (scores.length - 1) : 0;
+      const pts = scores.map((v, i) => (i * step).toFixed(1) + "," + (h - (v / 100) * h).toFixed(1)).join(" ");
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("viewBox", "0 0 " + w + " " + h);
+      svg.setAttribute("width", "100%");
+      svg.setAttribute("height", h);
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+      line.setAttribute("points", pts);
+      line.setAttribute("fill", "none");
+      line.setAttribute("stroke", "#3b82f6");
+      line.setAttribute("stroke-width", "2");
+      svg.append(line);
+      return svg;
+    }
+
+    async function showStation(id) {
+      const box = $("detail");
+      try {
+        const [s, history] = await Promise.all([
+          getJson("/stations/" + encodeURIComponent(id) + "/health"),
+          getJson("/stations/" + encodeURIComponent(id) + "/history?limit=30"),
+        ]);
+        box.className = "";
+        box.replaceChildren();
+
+        const dl = el("dl");
+        [["Station", s.station_id], ["Region", s.region || "-"], ["Status", s.connectivity_status],
+         ["Latency", s.latency_ms + " ms"], ["Errors", s.error_count], ["Firmware", s.firmware_version],
+         ["Score", s.score + (s.is_poor ? " (poor)" : "")],
+         ["Last report", new Date(s.last_reported_at).toLocaleString()]]
+          .forEach(([k, v]) => dl.append(el("dt", k), el("dd", v)));
+
+        box.append(dl, el("div", "Score trend (last " + history.length + " reports, oldest to newest)", "muted"),
+                   sparkline(history.map((r) => r.score).reverse()));
+      } catch (e) {
+        box.className = "muted";
+        box.textContent = "No data found for station " + id;
+      }
+    }
+
+    $("lookup").onsubmit = (e) => {
+      e.preventDefault();
+      const id = $("station-input").value.trim();
+      if (id) showStation(id);
+    };
+
+    loadOverview().catch(() => ($("updated").textContent = "could not load data"));
+    setInterval(() => loadOverview().catch(() => {}), 10000);
+  </script>
+</body>
+</html>
